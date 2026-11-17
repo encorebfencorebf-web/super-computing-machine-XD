@@ -1,47 +1,35 @@
-name: iOS Sim Build
+name: Inspect APK
 on: workflow_dispatch
-env: 
-  PROJECT_NAME: CodenameEngine
+
+permissions:
+  contents: read
+  actions: read
+
 jobs:
-  build:
-    name: iOS Build
-    runs-on: macos-latest
+  inspect:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@main
+      - name: Download APK from latest successful run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/dl
+          for RUN in $(gh run list --repo ${{ github.repository }} --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
+            echo "Trying run $RUN"
+            if gh run download "$RUN" --repo ${{ github.repository }} --name "Codename Engine Android" --dir /tmp/dl; then
+              echo "Downloaded from run $RUN"
+              break
+            fi
+          done
+          ls -la /tmp/dl
 
-      - name: Setting up Haxe
-        uses: krdlab/setup-haxe@v2
-        with:
-          haxe-version: 4.3.7
-          restore-keys: |
-            cache-build-ios
-      - name: Installing/Updating libraries
+      - name: Inspect native libs
         run: |
-          haxe -cp commandline -D analyzer-optimize --run Main setup -s
-      - name: Fix Haxelib
-        run: |
-          haxelib set lime git
-          haxelib set hxcpp git
-          haxelib set flixel git
-          haxelib set flixel-addons git
-          haxelib set flixel-animate git
-          haxelib set hxdiscord_rpc git
-          haxelib remove hxcpp
-          haxelib git hxcpp https://github.com/Ethantobot11/cne-hxcpp old
-      - name: Building the game
-        run: |
-          haxelib run lime build ios -nosign -simulator -x86_64 -arch=x86_64 -DHXCPP_M64
-
-      - name: Make Ipa
-        run: |
-          cd export/release/ios/build/Release-iphoneos
-          mkdir Payload
-          mv *.app Payload
-          zip -r ${{ env.PROJECT_NAME }}.ipa Payload
-          
-      - name: Uploading artifact (entire build)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Codename Engine iOS
-          path: export/release/ios/build/Release-iphoneos/*
+          APK=$(ls /tmp/dl/*.apk | head -1)
+          echo "APK: $APK"
+          mkdir -p /tmp/apk && unzip -q "$APK" -d /tmp/apk
+          ls -la /tmp/apk/lib/arm64-v8a/
+          for f in /tmp/apk/lib/arm64-v8a/*.so; do
+            echo "== $f"
+            readelf --dyn-syms "$f" | grep __emutls_get_address || true
+          done
