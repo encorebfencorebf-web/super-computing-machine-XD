@@ -6,23 +6,15 @@ permissions: write-all
 jobs:
   build-android:
     uses: ./.github/workflows/android.yml
-  build-ios:
-    uses: ./.github/workflows/ios.yml
- 
+
   Releaser:
-    needs: [build-android, build-ios]
+    needs: [build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Download Android Build
         uses: actions/download-artifact@main
         with:
           name: Codename Engine Android
-          path: ${{ github.workspace }}
-
-      - name: Download iOS Build
-        uses: actions/download-artifact@main
-        with:
-          name: Codename Engine iOS
           path: ${{ github.workspace }}
 
       - name: Publish The Release
@@ -33,4 +25,3 @@ jobs:
           prerelease: false
           files: |
             ${{ github.workspace }}/*.apk
-            ${{ github.workspace }}/*.ipa
