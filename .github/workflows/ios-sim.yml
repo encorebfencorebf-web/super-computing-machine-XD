@@ -1,53 +1,70 @@
-name: Inspect APK
-on: workflow_dispatch
+name: Check Library Changes
 
-permissions:
-  contents: read
-  actions: read
+# Mencari commit library git yang masuk SETELAH build hijau pertama.
+# Tidak mem-build apa pun, hanya membaca riwayat repo library (semuanya publik).
+
+on:
+  workflow_dispatch:
+    inputs:
+      green_time:
+        description: "Waktu library dipasang pada build HIJAU (UTC)"
+        default: "2026-11-17T11:30:00Z"
+      red_time:
+        description: "Waktu library dipasang pada build MERAH (UTC)"
+        default: "2026-11-18T08:56:00Z"
 
 jobs:
-  inspect:
+  check:
     runs-on: ubuntu-latest
     steps:
-      - name: Download APK
+      - name: Cek riwayat tiap library
         env:
-          GH_TOKEN: ${{ github.token }}
+          GREEN: ${{ inputs.green_time }}
+          RED: ${{ inputs.red_time }}
         run: |
-          mkdir -p /tmp/dl
-          REPO=${{ github.repository }}
-
-          echo "== Daftar release"
-          gh release list --repo $REPO || true
-
-          echo "== Coba download dari release mobile-legacy"
-          gh release download mobile-legacy --repo $REPO --pattern "*.apk" --dir /tmp/dl || echo "Gagal download dari release"
-
-          if [ -z "$(find /tmp/dl -name '*.apk')" ]; then
-            echo "== Coba download dari artifact"
-            for WF in "Release" "Android Build"; do
-              for RUN in $(gh run list --repo $REPO --workflow "$WF" --status success --limit 10 --json databaseId --jq '.[].databaseId'); do
-                echo "Coba run $RUN ($WF)"
-                if gh run download "$RUN" --repo $REPO --name "Codename Engine Android" --dir /tmp/dl; then
-                  break 2
-                fi
-              done
-            done
-          fi
-
-          echo "== Isi /tmp/dl"
-          find /tmp/dl -type f
-          if [ -z "$(find /tmp/dl -name '*.apk')" ]; then
-            echo "Tidak ada APK ditemukan"
-            exit 1
-          fi
-
-      - name: Inspect native libs
-        run: |
-          APK=$(find /tmp/dl -name '*.apk' | head -1)
-          echo "APK: $APK"
-          mkdir -p /tmp/apk && unzip -q "$APK" -d /tmp/apk
-          ls -la /tmp/apk/lib/arm64-v8a/
-          for f in /tmp/apk/lib/arm64-v8a/*.so; do
-            echo "== $f"
-            readelf --dyn-syms "$f" | grep __emutls_get_address || true
+          mkdir -p work && cd work
+          # nama|url|branch (kosong = branch default)
+          LIBS='
+          mobile-controls|https://github.com/ArkoseLabsOfficial/mobile-controls|
+          openfl|https://github.com/CodenameCrew/cne-openfl|old
+          lime|https://github.com/ArkoseLabsOfficial/lime|
+          flixel|https://github.com/CodenameCrew/cne-flixel|old
+          flixel-addons|https://github.com/CodenameCrew/cne-flixel-addons|old
+          hscript-improved|https://github.com/CodenameCrew/hscript-improved|custom-classes
+          flxanimate|https://github.com/CodenameCrew/cne-flxanimate|
+          hxdiscord_rpc|https://github.com/CodenameCrew/cne-hxdiscord_rpc|old
+          away3d|https://github.com/CodenameCrew/away3d|
+          '
+          S="$GITHUB_STEP_SUMMARY"
+          echo "# Perubahan library" >> "$S"
+          echo "Jendela: hijau = \`$GREEN\`, merah = \`$RED\`" >> "$S"
+          echo >> "$S"
+          CHANGED=""
+          echo "$LIBS" | while IFS='|' read -r name url branch; do
+            [ -z "$name" ] && continue
+            if [ -n "$branch" ]; then
+              git clone -q --filter=blob:none --single-branch --branch "$branch" "$url" "$name" || { echo "GAGAL clone $name" >> "$S"; continue; }
+            else
+              git clone -q --filter=blob:none "$url" "$name" || { echo "GAGAL clone $name" >> "$S"; continue; }
+            fi
+            cd "$name"
+            PIN=$(git rev-list -1 --before="$GREEN" HEAD)
+            TIP=$(git rev-parse HEAD)
+            {
+              echo "## $name  (${branch:-default})"
+              echo "- url: $url"
+              echo "- commit terakhir sebelum build hijau (kandidat pin): \`${PIN:-?}\`"
+              echo "- commit paling baru sekarang: \`$TIP\`"
+              echo
+              echo "Commit setelah build hijau:"
+              echo '```'
+              git log --since="$GREEN" --format='%h %cI %an  %s' HEAD | head -40
+              echo '```'
+              echo "Di antara hijau dan merah (ini yang paling dicurigai):"
+              echo '```'
+              git log --since="$GREEN" --until="$RED" --format='%h %cI %an  %s' HEAD | head -40
+              echo '```'
+              echo
+            } >> "$S"
+            cd ..
           done
